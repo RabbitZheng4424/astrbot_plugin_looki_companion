@@ -1,0 +1,94 @@
+{
+  "looki_api_key": {
+    "type": "string",
+    "description": "Looki API 密钥",
+    "hint": "在 Looki 开放平台申请，将通过请求头 X-API-Key 发送。",
+    "obvious_hint": true,
+    "default": ""
+  },
+  "looki_base_url": {
+    "type": "string",
+    "description": "Looki API 基础地址",
+    "hint": "默认无需修改。",
+    "default": "https://open.looki.tech/api/v1"
+  },
+  "enable_realtime": {
+    "type": "bool",
+    "description": "是否启用实时事件查询",
+    "hint": "关闭后不会调用 /realtime/latest-event，会退回最近 moments 推断场景。",
+    "default": true
+  },
+  "enable_in_group_chat": {
+    "type": "bool",
+    "description": "群聊中是否允许使用 Looki",
+    "hint": "关闭后，所有群聊都不会触发 Looki 查询，仅私聊可用。",
+    "default": false
+  },
+  "admin_only": {
+    "type": "bool",
+    "description": "是否仅管理员/主人可触发 Looki 查询",
+    "hint": "开启后，群聊和私聊里都只有管理员身份才允许触发 Looki 工具。",
+    "default": true
+  },
+  "request_timeout": {
+    "type": "int",
+    "description": "请求超时秒数",
+    "hint": "单次 HTTP 请求总超时。",
+    "default": 30
+  },
+  "recent_experience_window_minutes": {
+    "type": "int",
+    "description": "最近经历默认回看窗口（分钟）",
+    "hint": "looki_get_recent_experience 在未传 minutes 时使用，最大 720。",
+    "default": 120
+  },
+  "realtime_cache_seconds": {
+    "type": "int",
+    "description": "实时事件短缓存秒数",
+    "hint": "减少同一轮或短时间内的重复查询。",
+    "default": 15
+  },
+  "moment_summary_max_chars": {
+    "type": "int",
+    "description": "moment 描述最大字符数",
+    "hint": "用于裁剪详情描述，减少 LLM token 消耗。",
+    "default": 220
+  },
+  "enable_image_captioning": {
+    "type": "bool",
+    "description": "是否启用图片转文字",
+    "hint": "开启后会先把 Looki 图片转成简短文字描述，再整合进共同经历摘要。",
+    "default": false
+  },
+  "caption_model": {
+    "type": "string",
+    "description": "视觉模型名称",
+    "hint": "例如 Qwen/Qwen2-VL-7B-Instruct。留空则不启用自定义视觉模型。",
+    "default": ""
+  },
+  "caption_api_base": {
+    "type": "string",
+    "description": "视觉模型 API Base URL",
+    "hint": "默认使用硅基流动兼容地址。",
+    "default": "https://api.siliconflow.cn/v1"
+  },
+  "caption_api_key": {
+    "type": "string",
+    "description": "视觉模型 API Key",
+    "hint": "仅在启用自定义视觉模型时需要填写。",
+    "default": "",
+    "obvious_hint": true
+  },
+  "enable_debug_logging": {
+    "type": "bool",
+    "description": "是否启用调试日志",
+    "hint": "记录请求路径和错误信息，但不会打印 API Key。",
+    "default": false
+  },
+  "inject_routing_hint": {
+    "type": "bool",
+    "description": "是否向 Agent 注入 Looki 工具路由提示",
+    "hint": "帮助模型在最近经历、当前场景和 12 小时内回忆时优先调用 Looki 工具。",
+    "default": true
+  }
+}

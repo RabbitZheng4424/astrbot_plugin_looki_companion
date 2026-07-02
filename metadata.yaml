@@ -1,0 +1,35 @@
+name: astrbot_plugin_looki_companion
+display_name: Looki 陪伴记忆
+desc: 将 Looki 的实时事件与最近 12 小时 moments 整合成“我们”视角的共同经历摘要。
+short_desc: 把 Looki 记录转成陪伴式共同经历摘要。
+author: 瑞贝特
+repo: https://github.com/RabbitZheng4424/astrbot_plugin_looki_companion
+version: 0.1.0
+entry: main.py
+type: plugin
+astrbot_version: ">=4.23.1"
+license: MIT
+keywords:
+  - astrbot
+  - looki
+  - memory
+  - moments
+  - realtime
+support_platforms:
+  - aiocqhttp
+  - qq_official
+  - qq_official_webhook
+  - telegram
+  - discord
+  - wecom
+  - wecom_ai_bot
+  - lark
+  - dingtalk
+  - slack
+  - kook
+  - vocechat
+  - satori
+  - misskey
+  - line
+  - matrix
+  - mattermost
