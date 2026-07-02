@@ -1,9 +1,10 @@
 name: astrbot_plugin_looki_companion
 display_name: Looki 陪伴记忆
-desc: 将 Looki 的实时事件与最近 12 小时 moments 整合成“我们”视角的共同经历摘要。
-short_desc: 把 Looki 记录转成陪伴式共同经历摘要。
+desc: 为了让助手能了解我们的现实世界，把 Looki 的实时事件与最近 12 小时 moments 整合成“我们”视角的共同经历摘要。
+short_desc: 让助手通过 Looki 了解我们的现实世界与刚刚经历。
 author: 瑞贝特
 repo: https://github.com/RabbitZheng4424/astrbot_plugin_looki_companion
+social_link: https://rabbitz.icu
 version: 0.1.0
 entry: main.py
 type: plugin
