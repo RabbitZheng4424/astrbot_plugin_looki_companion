@@ -66,6 +66,13 @@
     "hint": "例如 Qwen/Qwen2-VL-7B-Instruct。留空则不启用自定义视觉模型。",
     "default": ""
   },
+  "caption_provider_id": {
+    "type": "string",
+    "description": "AstrBot 视觉 Provider ID",
+    "hint": "可选一个 AstrBot 已配置的视觉/多模态 Provider。留空则自动回退到 AstrBot 默认图片描述 Provider，再回退当前聊天 Provider。",
+    "default": "",
+    "_special": "select_provider"
+  },
   "caption_api_base": {
     "type": "string",
     "description": "视觉模型 API Base URL",
@@ -89,6 +96,12 @@
     "type": "bool",
     "description": "是否向 Agent 注入 Looki 工具路由提示",
     "hint": "帮助模型在最近经历、当前场景和 12 小时内回忆时优先调用 Looki 工具。",
+    "default": true
+  },
+  "inject_companion_state": {
+    "type": "bool",
+    "description": "是否注入隐性陪伴态提示",
+    "hint": "开启后默认走智能触发：只有消息看起来和当前共同处境有关时才注入一小段中文背景；关闭后响应通常更快、token 消耗更低。",
     "default": true
   }
 }
