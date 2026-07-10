@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import random
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -183,12 +184,20 @@ class LookiCompanionPlugin(Star):
 
     @filter.on_llm_request()
     async def on_llm_request(self, event: AstrMessageEvent, req: ProviderRequest):
-        if TextPart is None or not self._inject_routing_hint():
+        if TextPart is None:
             return
-        part = TextPart(text=self._build_tool_policy(event))
-        if hasattr(part, "mark_as_temp"):
-            part = part.mark_as_temp()
-        req.extra_user_content_parts.append(part)
+        if self._inject_routing_hint():
+            part = TextPart(text=self._build_tool_policy(event))
+            if hasattr(part, "mark_as_temp"):
+                part = part.mark_as_temp()
+            req.extra_user_content_parts.append(part)
+        if self._inject_companion_state() and self._should_inject_companion_state(event):
+            state_text = await self._build_companion_state_hint(event)
+            if state_text:
+                part = TextPart(text=state_text)
+                if hasattr(part, "mark_as_temp"):
+                    part = part.mark_as_temp()
+                req.extra_user_content_parts.append(part)
 
     @filter.command_group("looki")
     def looki(self):
@@ -209,9 +218,11 @@ class LookiCompanionPlugin(Star):
             f"- 群聊可用: {'是' if self._enable_in_group_chat() else '否'}",
             f"- 仅管理员可触发: {'是' if self._admin_only() else '否'}",
             f"- 图片转文字: {'开' if self._enable_image_captioning() else '关'}",
+            f"- 图片转文字策略: {await self._describe_caption_strategy(event)}",
             f"- 最近经历默认窗口: {self._recent_experience_window_minutes()} 分钟",
             f"- 请求超时: {self._request_timeout()} 秒",
             f"- 调试日志: {'开' if self._debug_enabled() else '关'}",
+            f"- 隐性陪伴态注入: {self._render_companion_state_mode()}",
         ]
         yield event.plain_result("\n".join(lines))
 
@@ -479,16 +490,26 @@ class LookiCompanionPlugin(Star):
         cached = self._get_cache(cache_key)
         if isinstance(cached, str):
             return cached
-        if self._caption_model() and self._caption_api_base() and self._caption_api_key():
-            text = await self._caption_with_custom_api(image_url)
-        else:
-            text = await self._caption_with_current_provider(event, image_url)
-        if not text:
-            return None
-        normalized = self._sanitize_scene_text(text)
-        if normalized:
-            self._set_cache(cache_key, normalized, 1800)
-        return normalized
+        for strategy in await self._resolve_caption_strategies(event):
+            kind = strategy.get("kind")
+            if kind == "custom_api":
+                text = await self._caption_with_custom_api(image_url)
+            else:
+                provider_id = str(strategy.get("provider_id") or "").strip()
+                if not provider_id:
+                    continue
+                text = await self._caption_with_provider(
+                    provider_id,
+                    image_url,
+                    label=str(strategy.get("label") or provider_id),
+                )
+            if not text:
+                continue
+            normalized = self._sanitize_scene_text(text)
+            if normalized:
+                self._set_cache(cache_key, normalized, 1800)
+                return normalized
+        return None
 
     async def _caption_with_custom_api(self, image_url: str) -> str | None:
         client = self._get_http_client()
@@ -522,11 +543,8 @@ class LookiCompanionPlugin(Star):
         content = message.get("content") if isinstance(message, dict) else None
         return content.strip() if isinstance(content, str) and content.strip() else None
 
-    async def _caption_with_current_provider(self, event: AstrMessageEvent, image_url: str) -> str | None:
+    async def _caption_with_provider(self, provider_id: str, image_url: str, *, label: str) -> str | None:
         try:
-            provider_id = await self.context.get_current_chat_provider_id(event.unified_msg_origin)
-            if not provider_id:
-                return None
             llm_resp = await self.context.llm_generate(
                 chat_provider_id=provider_id,
                 prompt="请用一句简短中文描述可见画面，不要提到照片，也不要猜测不可见的隐私信息。",
@@ -534,7 +552,7 @@ class LookiCompanionPlugin(Star):
             )
         except Exception as exc:
             if self._debug_enabled():
-                logger.warning("[%s] 使用当前模型做图片转文字失败: %s", PLUGIN_NAME, exc)
+                logger.warning("[%s] 使用 %s 做图片转文字失败: %s", PLUGIN_NAME, label, exc)
             return None
         text = getattr(llm_resp, "completion_text", None)
         return text.strip() if isinstance(text, str) and text.strip() else None
@@ -613,11 +631,110 @@ class LookiCompanionPlugin(Star):
             "Looki 只负责最近 12 小时内的实时场景和共同经历，不负责 journals，也不负责更久以前的旧事。\n"
             "当用户问我们刚才去了哪里、我们刚刚在做什么、今天我们去了哪些地方时，优先调用 looki_get_recent_experience、looki_get_current_scene、looki_get_day_summary。\n"
             "当用户在回忆最近 12 小时内的某个地方、物件或经历时，优先调用 looki_remember_experience。\n"
+            "如果本轮回复明显依赖我们此刻的共同处境，可以先参考 looki_companion_state；只有需要更具体的共同经历时再调用 Looki 工具。\n"
             "如果用户在问超过 12 小时的旧事，或者在问日记正文、笔记原文，不要使用 Looki，应交给记忆插件或日记插件。\n"
             "Looki 工具已经直接返回自然语言摘要。请直接融入回答，不要提及 API、moment、URL 或 JSON。\n"
             f"{group_note}\n"
             "</looki_tool_policy>"
         )
+
+    async def _build_companion_state_hint(self, event: AstrMessageEvent) -> str | None:
+        if self._tool_denied_text(event):
+            return None
+        state_line = await self._describe_companion_state(event)
+        return (
+            "<looki_companion_state>\n"
+            "以下是本轮可参考的隐性共同处境，不是必须说出口的台词。\n"
+            f"{state_line}\n"
+            "默认只把它当背景感知，用来帮助把握现场语气和临场感。\n"
+            "只有在用户正在问共同处境、当前回复明显依赖现场、或不提会显得失真时，才顺势轻轻带一句。\n"
+            "如果用户在聊别的话题，不要突然播报“我现在在做什么”；若场景不够新或可能暴露隐私，则宁可不提。\n"
+            "</looki_companion_state>"
+        )
+
+    async def _describe_companion_state(self, event: AstrMessageEvent) -> str:
+        cache_key = f"companion_state:{event.unified_msg_origin}"
+        cached = self._get_cache(cache_key)
+        if isinstance(cached, str):
+            return cached
+        precise_allowed = not self._is_group_chat(event)
+        if self._enable_realtime():
+            item = await self._fetch_latest_event()
+            if item is not None:
+                text = self._render_companion_state_line(
+                    item,
+                    precise_allowed=precise_allowed,
+                    source_label="实时事件",
+                    confidence_text="较高",
+                )
+                self._set_cache(cache_key, text, self._realtime_cache_seconds())
+                return text
+        now = self._now_local()
+        moments = await self._fetch_window_moments(now - timedelta(minutes=30), now)
+        if moments:
+            latest = moments[-1]
+            text = self._render_companion_state_line(
+                latest,
+                precise_allowed=precise_allowed,
+                source_label="最近 moments",
+                confidence_text="中等",
+            )
+            self._set_cache(cache_key, text, self._realtime_cache_seconds())
+            return text
+        text = "- 当前没有足够新的现场片段；不要猜测我们此刻身处哪里，也不要主动声称正在一起做某件事。"
+        self._set_cache(cache_key, text, self._realtime_cache_seconds())
+        return text
+
+    def _render_companion_state_line(
+        self,
+        item: dict[str, Any],
+        *,
+        precise_allowed: bool,
+        source_label: str,
+        confidence_text: str,
+    ) -> str:
+        occurred_at = item.get("occurred_at_dt")
+        time_text = self._format_clock(occurred_at) if isinstance(occurred_at, datetime) else "刚刚"
+        location = self._render_location(item.get("location_name"), precise_allowed=precise_allowed)
+        detail = self._build_scene_detail(item)
+        if detail:
+            return (
+                f"- 最近共同处境：{time_text} 左右我们像是在 {location}，还能注意到 {detail}。来源：{source_label}，可信度{confidence_text}。"
+            )
+        return f"- 最近共同处境：{time_text} 左右我们像是在 {location}。来源：{source_label}，可信度{confidence_text}。"
+
+    async def _describe_caption_strategy(self, event: AstrMessageEvent) -> str:
+        labels = [str(item.get("label") or "").strip() for item in await self._resolve_caption_strategies(event)]
+        labels = [label for label in labels if label]
+        return " -> ".join(labels) if labels else "未配置可用来源"
+
+    async def _resolve_caption_strategies(self, event: AstrMessageEvent) -> list[dict[str, str]]:
+        result: list[dict[str, str]] = []
+        seen_provider_ids: set[str] = set()
+        if self._caption_model() and self._caption_api_base() and self._caption_api_key():
+            result.append({"kind": "custom_api", "label": "自定义视觉 API"})
+        for provider_id, label in await self._resolve_caption_provider_candidates(event):
+            if provider_id in seen_provider_ids:
+                continue
+            seen_provider_ids.add(provider_id)
+            result.append({"kind": "provider", "provider_id": provider_id, "label": label})
+        return result
+
+    async def _resolve_caption_provider_candidates(self, event: AstrMessageEvent) -> list[tuple[str, str]]:
+        result: list[tuple[str, str]] = []
+        plugin_provider_id = self._caption_provider_id()
+        if plugin_provider_id:
+            result.append((plugin_provider_id, "插件指定视觉 Provider"))
+        default_provider_id = self._default_image_caption_provider_id(event)
+        if default_provider_id:
+            result.append((default_provider_id, "AstrBot 默认图片描述 Provider"))
+        try:
+            current_provider_id = await self.context.get_current_chat_provider_id(event.unified_msg_origin)
+        except Exception:
+            current_provider_id = ""
+        if current_provider_id:
+            result.append((current_provider_id, "当前聊天 Provider"))
+        return result
 
     async def _request_json(self, path: str, *, params: dict[str, Any] | None = None) -> Any:
         if not self._api_key():
@@ -771,6 +888,50 @@ class LookiCompanionPlugin(Star):
                 return raw[key]
         return default
 
+    def _should_inject_companion_state(self, event: AstrMessageEvent) -> bool:
+        message = self._normalize_gate_text(event.message_str)
+        if not message:
+            return False
+        if message.startswith("/looki"):
+            return True
+        direct_cues = (
+            "现在",
+            "刚刚",
+            "刚才",
+            "今天",
+            "目前",
+            "这会儿",
+            "眼前",
+            "现场",
+            "附近",
+            "周围",
+            "在哪",
+            "哪里",
+            "去哪",
+            "到哪",
+            "在干嘛",
+            "做什么",
+            "什么地方",
+            "场景",
+            "看到",
+            "看见",
+            "身边",
+            "旁边",
+            "路上",
+            "店里",
+        )
+        if any(cue in message for cue in direct_cues):
+            return True
+        shared_cues = ("我们", "一起", "陪我", "陪着我", "跟我")
+        scene_cues = ("这", "这里", "这个地方", "那家", "那边", "刚才那", "眼前", "现场")
+        return any(cue in message for cue in shared_cues) and any(cue in message for cue in scene_cues)
+
+    def _normalize_gate_text(self, value: Any) -> str:
+        text = str(value or "").strip().lower()
+        if not text:
+            return ""
+        return " ".join(text.split())
+
     def _clip(self, value: Any, limit: int) -> str | None:
         if value is None:
             return None
@@ -789,6 +950,20 @@ class LookiCompanionPlugin(Star):
         return " ".join(text.split()).strip(" .,;:") or None
 
     def _render_location(self, value: Any, *, precise_allowed: bool) -> str:
+        if isinstance(value, str) and value.startswith("{"):
+            try:
+                value = json.loads(value)
+            except (json.JSONDecodeError, ValueError):
+                pass
+        if isinstance(value, dict):
+            parts = []
+            for k in ("name", "short_name", "display_name", "address", "street", "city", "region", "area"):
+                v = value.get(k)
+                if isinstance(v, str) and v.strip():
+                    parts.append(v.strip())
+            if not parts:
+                parts = [str(v) for v in value.values() if isinstance(v, str) and v.strip()]
+            value = " ".join(parts) if parts else None
         name = self._clip(value, 30)
         if not name:
             return "外面"
@@ -929,6 +1104,9 @@ class LookiCompanionPlugin(Star):
     def _caption_model(self) -> str:
         return str(self.config.get("caption_model") or "").strip()
 
+    def _caption_provider_id(self) -> str:
+        return str(self.config.get("caption_provider_id") or "").strip()
+
     def _caption_api_base(self) -> str:
         return str(self.config.get("caption_api_base") or "https://api.siliconflow.cn/v1").strip()
 
@@ -969,8 +1147,25 @@ class LookiCompanionPlugin(Star):
     def _inject_routing_hint(self) -> bool:
         return bool(self.config.get("inject_routing_hint", True))
 
+    def _inject_companion_state(self) -> bool:
+        return bool(self.config.get("inject_companion_state", True))
+
+    def _render_companion_state_mode(self) -> str:
+        if not self._inject_companion_state():
+            return "关（更省 token、更快）"
+        return "开（智能触发）"
+
     def _debug_enabled(self) -> bool:
         return bool(self.config.get("enable_debug_logging", False))
+
+    def _default_image_caption_provider_id(self, event: AstrMessageEvent) -> str:
+        runtime_config = self.context.get_config(umo=event.unified_msg_origin) or {}
+        if not isinstance(runtime_config, dict):
+            return ""
+        provider_settings = runtime_config.get("provider_settings", {})
+        if not isinstance(provider_settings, dict):
+            return ""
+        return str(provider_settings.get("default_image_caption_provider_id") or "").strip()
 
     def _now_local(self) -> datetime:
         return datetime.now().astimezone()
