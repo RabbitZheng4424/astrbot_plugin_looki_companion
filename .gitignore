@@ -1,30 +1,3 @@
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
-*.pyd
-*.so
-*.egg-info/
-dist/
-build/
-
-# 插件打包临时文件
-*.zip
-.DS_Store
-Thumbs.db
-
-# 临时调试文件
-*.md.tmp
-*.json.tmp
-*.env
-*.log
-.env/
-tmp/
-temp/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
